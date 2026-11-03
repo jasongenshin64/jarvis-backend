@@ -44,22 +44,33 @@ def chat():
     if not GEMINI_API_KEY:
         text_reply = "API Key Gemini belum dipasang di Vercel, Sir."
     else:
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
-            raw_reply = response.text.strip()
-            
-            if raw_reply.startswith("```json"):
-                raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
-            elif raw_reply.startswith("```"):
-                raw_reply = raw_reply.replace("```", "").strip()
-            
-            parsed_res = json.loads(raw_reply)
-            text_reply = parsed_res.get("jawaban", text_reply)
-            action = parsed_res.get("aksi", action)
-        except Exception as e:
-            print(f"Error Gemini: {e}")
-            text_reply = f"Gemini Error: {str(e)}"
+        # Mencoba daftar variasi nama model Gemini
+        candidate_models = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-pro']
+        success = False
+        last_error = ""
+
+        for model_name in candidate_models:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                raw_reply = response.text.strip()
+                
+                if raw_reply.startswith("```json"):
+                    raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
+                elif raw_reply.startswith("```"):
+                    raw_reply = raw_reply.replace("```", "").strip()
+                
+                parsed_res = json.loads(raw_reply)
+                text_reply = parsed_res.get("jawaban", text_reply)
+                action = parsed_res.get("aksi", action)
+                success = True
+                break
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        if not success:
+            text_reply = f"Gemini Error: {last_error}"
 
     audio_filename = "jarvis_reply.wav"
     audio_path = os.path.join(AUDIO_FOLDER, audio_filename)
