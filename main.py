@@ -2,18 +2,22 @@ import os
 import json
 import asyncio
 from flask import Flask, request, jsonify, send_from_directory
-import google.generativeai as genai
+from google import genai
 import edge_tts
 
 app = Flask(__name__)
 
 AUDIO_FOLDER = "/tmp"
 
-# Mengambil Gemini API Key dari Environment Variable
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# Mengambil API Key dan membersihkan spasi/tanda petik bawaan dari Vercel
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip().strip('"').strip("'")
 
+client = None
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print(f"Error Init Client: {e}")
 
 @app.route("/", methods=["GET"])
 def home():
@@ -41,36 +45,26 @@ def chat():
     action = "DIAM"
     text_reply = "At your service, Sir."
 
-    if not GEMINI_API_KEY:
-        text_reply = "API Key Gemini belum dipasang di Vercel, Sir."
+    if not GEMINI_API_KEY or not client:
+        text_reply = "API Key Gemini belum terkonfigurasi dengan benar di Vercel, Sir."
     else:
-        # Mencoba daftar variasi nama model Gemini
-        candidate_models = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-pro']
-        success = False
-        last_error = ""
-
-        for model_name in candidate_models:
-            try:
-                model = genai.GenerativeModel(model_name)
-                response = model.generate_content(prompt)
-                raw_reply = response.text.strip()
-                
-                if raw_reply.startswith("```json"):
-                    raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
-                elif raw_reply.startswith("```"):
-                    raw_reply = raw_reply.replace("```", "").strip()
-                
-                parsed_res = json.loads(raw_reply)
-                text_reply = parsed_res.get("jawaban", text_reply)
-                action = parsed_res.get("aksi", action)
-                success = True
-                break
-            except Exception as e:
-                last_error = str(e)
-                continue
-
-        if not success:
-            text_reply = f"Gemini Error: {last_error}"
+        try:
+            response = client.models.generate_content(
+                model='gemini-1.5-flash',
+                contents=prompt
+            )
+            raw_reply = response.text.strip()
+            
+            if raw_reply.startswith("```json"):
+                raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
+            elif raw_reply.startswith("```"):
+                raw_reply = raw_reply.replace("```", "").strip()
+            
+            parsed_res = json.loads(raw_reply)
+            text_reply = parsed_res.get("jawaban", text_reply)
+            action = parsed_res.get("aksi", action)
+        except Exception as e:
+            text_reply = f"Gemini Error: {str(e)}"
 
     audio_filename = "jarvis_reply.wav"
     audio_path = os.path.join(AUDIO_FOLDER, audio_filename)
