@@ -42,24 +42,38 @@ def chat():
     if not client:
         text_reply = "API Key Gemini belum terpasang, Sir."
     else:
-        try:
-            # Menggunakan model terbaru yang didukung API Key kamu: gemini-3.8-flash
-            res = client.models.generate_content(
-                model='gemini-3.8-flash',
-                contents=prompt
-            )
-            raw_reply = res.text.strip()
-            
-            if raw_reply.startswith("```json"):
-                raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
-            elif raw_reply.startswith("```"):
-                raw_reply = raw_reply.replace("```", "").strip()
-            
-            parsed_res = json.loads(raw_reply)
-            text_reply = parsed_res.get("jawaban", text_reply)
-            action = parsed_res.get("aksi", action)
-        except Exception as e:
-            text_reply = f"Gemini Error: {str(e)}"
+        # Menggunakan daftar fallback jika model utama sibuk (503)
+        candidate_models = ['gemini-2.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.0-flash']
+        res = None
+        last_error = ""
+
+        for m_name in candidate_models:
+            try:
+                res = client.models.generate_content(
+                    model=m_name,
+                    contents=prompt
+                )
+                if res and res.text:
+                    break
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        if res and res.text:
+            try:
+                raw_reply = res.text.strip()
+                if raw_reply.startswith("```json"):
+                    raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
+                elif raw_reply.startswith("```"):
+                    raw_reply = raw_reply.replace("```", "").strip()
+                
+                parsed_res = json.loads(raw_reply)
+                text_reply = parsed_res.get("jawaban", text_reply)
+                action = parsed_res.get("aksi", action)
+            except Exception as parse_err:
+                text_reply = res.text.strip()
+        else:
+            text_reply = f"Gemini Error: {last_error}"
 
     audio_filename = "jarvis_reply.wav"
     audio_path = os.path.join(AUDIO_FOLDER, audio_filename)
