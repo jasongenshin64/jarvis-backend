@@ -7,12 +7,10 @@ import edge_tts
 
 app = Flask(__name__)
 
-# Folder untuk menyimpan sementara file suara
-AUDIO_FOLDER = "static"
-if not os.path.exists(AUDIO_FOLDER):
-    os.makedirs(AUDIO_FOLDER)
+# Menggunakan folder /tmp (khusus lingkungan Serverless Vercel)
+AUDIO_FOLDER = "/tmp"
 
-# Mengambil Gemini API Key dari Environment Variable Render
+# Mengambil Gemini API Key dari Environment Variable
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
@@ -29,13 +27,13 @@ def chat():
     prompt = f"""
     Kamu adalah J.A.R.V.I.S. (Just A Rather Very Intelligent System).
     Pengguna berkata: "{user_text}".
-
+    
     Aturan:
     1. Jika pengguna meminta membuka topeng/helm, tentukan "aksi": "BUKA".
     2. Jika meminta menutup topeng/helm, tentukan "aksi": "TUTUP".
     3. Jika hanya bicara biasa/bertanya, tentukan "aksi": "DIAM".
     4. Jawablah secara singkat (maksimal 2 kalimat), sopan, dan panggil pengguna dengan 'Sir'.
-
+    
     Kembalikan respon HANYA berupa JSON valid dengan format:
     {{"jawaban": "teks respon", "aksi": "BUKA/TUTUP/DIAM"}}
     """
@@ -50,11 +48,11 @@ def chat():
                 contents=prompt
             )
             raw_reply = response.text.strip()
-
+            
             # Membersihkan tag markdown json jika ada
             if raw_reply.startswith("```json"):
                 raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
-
+            
             parsed_res = json.loads(raw_reply)
             text_reply = parsed_res.get("jawaban", text_reply)
             action = parsed_res.get("aksi", action)
@@ -62,7 +60,7 @@ def chat():
             print(f"Error Gemini: {e}")
             text_reply = "Systems are temporarily experiencing issues, Sir."
 
-    # Membuat Audio Suara Jarvis (Edge-TTS)
+    # Membuat Audio Suara Jarvis (Edge-TTS) di folder /tmp
     audio_filename = "jarvis_reply.wav"
     audio_path = os.path.join(AUDIO_FOLDER, audio_filename)
 
@@ -70,7 +68,10 @@ def chat():
         communicate = edge_tts.Communicate(text_reply, "en-GB-RyanNeural")
         await communicate.save(audio_path)
 
-    asyncio.run(generate_voice())
+    try:
+        asyncio.run(generate_voice())
+    except Exception as e:
+        print(f"Error TTS: {e}")
 
     # Membuat URL Publik untuk diunduh ESP32
     base_url = request.host_url.rstrip("/")
@@ -82,7 +83,7 @@ def chat():
         "audio_url": audio_url
     })
 
-# Endpoint untuk ESP32 mengunduh file audio wav
+# Endpoint untuk ESP32 mengunduh file audio wav dari folder /tmp
 @app.route("/static/<filename>", methods=["GET"])
 def serve_audio(filename):
     return send_from_directory(AUDIO_FOLDER, filename)
