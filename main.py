@@ -21,6 +21,7 @@ def home():
 def chat():
     data = request.json or {}
     user_text = data.get("text", "Hi Jarvis")
+    user_text_lower = user_text.lower()
 
     prompt = f"""
     Kamu J.A.R.V.I.S. Pengguna berkata: "{user_text}".
@@ -35,31 +36,49 @@ def chat():
 
     action = "DIAM"
     text_reply = "At your service, Sir."
+    ai_success = False
 
+    # 1. Coba panggil AI (dengan daftar fallback jika 503 High Demand)
     if client:
-        try:
-            # Langsung kunci ke gemini-3.8-flash dengan respon cepat
-            res = client.models.generate_content(
-                model='gemini-3.8-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    max_output_tokens=60,
-                    temperature=0.2
+        candidate_models = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-latest']
+        for m_name in candidate_models:
+            try:
+                res = client.models.generate_content(
+                    model=m_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        max_output_tokens=60,
+                        temperature=0.2
+                    )
                 )
-            )
-            if res and res.text:
-                raw_reply = res.text.strip()
-                if raw_reply.startswith("```json"):
-                    raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
-                elif raw_reply.startswith("```"):
-                    raw_reply = raw_reply.replace("```", "").strip()
-                
-                parsed_res = json.loads(raw_reply)
-                text_reply = parsed_res.get("jawaban", text_reply)
-                action = parsed_res.get("aksi", action)
-        except Exception as e:
-            text_reply = f"Gemini Error: {str(e)}"
+                if res and res.text:
+                    raw_reply = res.text.strip()
+                    if raw_reply.startswith("```json"):
+                        raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
+                    elif raw_reply.startswith("```"):
+                        raw_reply = raw_reply.replace("```", "").strip()
+                    
+                    parsed_res = json.loads(raw_reply)
+                    text_reply = parsed_res.get("jawaban", text_reply)
+                    action = parsed_res.get("aksi", action)
+                    ai_success = True
+                    break
+            except Exception:
+                continue
 
+    # 2. Cadangan Lokal (Jika seluruh AI Google 503/Down, Hardware ESP32 Tetap Berjalan!)
+    if not ai_success:
+        if "buka" in user_text_lower and ("helm" in user_text_lower or "topeng" in user_text_lower):
+            action = "BUKA"
+            text_reply = "Opening the faceplate now, Sir."
+        elif "tutup" in user_text_lower and ("helm" in user_text_lower or "topeng" in user_text_lower):
+            action = "TUTUP"
+            text_reply = "Closing the faceplate now, Sir."
+        else:
+            action = "DIAM"
+            text_reply = "Google servers are experiencing high demand, Sir, but local systems are active."
+
+    # Pembuatan suara TTS
     audio_filename = "jarvis_reply.wav"
     audio_path = os.path.join(AUDIO_FOLDER, audio_filename)
 
