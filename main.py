@@ -3,6 +3,7 @@ import json
 import asyncio
 from flask import Flask, request, jsonify, send_from_directory
 from google import genai
+from google.genai import types
 import edge_tts
 
 app = Flask(__name__)
@@ -10,7 +11,6 @@ app = Flask(__name__)
 AUDIO_FOLDER = "/tmp"
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip().strip('"').strip("'")
-
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 @app.route("/", methods=["GET"])
@@ -23,44 +23,31 @@ def chat():
     user_text = data.get("text", "Hi Jarvis")
 
     prompt = f"""
-    Kamu adalah J.A.R.V.I.S. (Just A Rather Very Intelligent System).
-    Pengguna berkata: "{user_text}".
-    
+    Kamu J.A.R.V.I.S. Pengguna berkata: "{user_text}".
     Aturan:
-    1. Jika pengguna meminta membuka topeng/helm, tentukan "aksi": "BUKA".
-    2. Jika meminta menutup topeng/helm, tentukan "aksi": "TUTUP".
-    3. Jika hanya bicara biasa/bertanya, tentukan "aksi": "DIAM".
-    4. Jawablah secara singkat (maksimal 2 kalimat), sopan, dan panggil pengguna dengan 'Sir'.
+    1. Buka helm -> "aksi": "BUKA"
+    2. Tutup helm -> "aksi": "TUTUP"
+    3. Bicara biasa -> "aksi": "DIAM"
+    4. Jawab sangat singkat (maksimal 1 kalimat), sopan, panggil 'Sir'.
     
-    Kembalikan respon HANYA berupa JSON valid dengan format:
-    {{"jawaban": "teks respon", "aksi": "BUKA/TUTUP/DIAM"}}
+    Format JSON HANYA: {{"jawaban": "teks", "aksi": "BUKA/TUTUP/DIAM"}}
     """
 
     action = "DIAM"
     text_reply = "At your service, Sir."
 
-    if not client:
-        text_reply = "API Key Gemini belum terpasang, Sir."
-    else:
-        # Menggunakan daftar fallback jika model utama sibuk (503)
-        candidate_models = ['gemini-2.5-flash-lite', 'gemini-3.8-flash', 'gemini-2.0-flash']
-        res = None
-        last_error = ""
-
-        for m_name in candidate_models:
-            try:
-                res = client.models.generate_content(
-                    model=m_name,
-                    contents=prompt
+    if client:
+        try:
+            # Langsung kunci ke gemini-3.8-flash dengan respon cepat
+            res = client.models.generate_content(
+                model='gemini-3.8-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=60,
+                    temperature=0.2
                 )
-                if res and res.text:
-                    break
-            except Exception as e:
-                last_error = str(e)
-                continue
-
-        if res and res.text:
-            try:
+            )
+            if res and res.text:
                 raw_reply = res.text.strip()
                 if raw_reply.startswith("```json"):
                     raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
@@ -70,10 +57,8 @@ def chat():
                 parsed_res = json.loads(raw_reply)
                 text_reply = parsed_res.get("jawaban", text_reply)
                 action = parsed_res.get("aksi", action)
-            except Exception as parse_err:
-                text_reply = res.text.strip()
-        else:
-            text_reply = f"Gemini Error: {last_error}"
+        except Exception as e:
+            text_reply = f"Gemini Error: {str(e)}"
 
     audio_filename = "jarvis_reply.wav"
     audio_path = os.path.join(AUDIO_FOLDER, audio_filename)
