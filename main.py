@@ -47,12 +47,13 @@ def chat():
     if not GEMINI_API_KEY or not client:
         text_reply = "API Key Gemini belum terkonfigurasi dengan benar di Vercel, Sir."
     else:
-        # Daftar model yang dicoba secara berurutan
+        # Menggunakan nama model resmi yang ada di akun kamu
         models_to_try = [
             'gemini-2.5-flash',
-            'gemini-2.0-flash',
-            'gemini-1.5-flash',
-            'gemini-1.5-pro'
+            'models/gemini-2.5-flash',
+            'gemini-flash-latest',
+            'models/gemini-flash-latest',
+            'gemini-2.5-flash-lite'
         ]
         
         response_text = None
@@ -68,7 +69,7 @@ def chat():
                     response_text = res.text.strip()
                     break
             except Exception as e:
-                last_error = str(e)
+                last_error = f"{m_name}: {str(e)}"
                 continue
 
         if response_text:
@@ -85,12 +86,7 @@ def chat():
             except Exception as parse_err:
                 text_reply = response_text
         else:
-            # Jika semua model gagal, dapatkan daftar model resmi yang diizinkan untuk API Key ini
-            try:
-                available_models = [m.name for m in client.models.list()]
-                text_reply = f"Model gagal dipanggil. Model yang tersedia untuk kunci ini: {available_models}"
-            except Exception as list_err:
-                text_reply = f"Gemini Error: {last_error}"
+            text_reply = f"Gemini Error: {last_error}"
 
     audio_filename = "jarvis_reply.wav"
     audio_path = os.path.join(AUDIO_FOLDER, audio_filename)
