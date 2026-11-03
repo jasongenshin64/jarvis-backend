@@ -43,9 +43,9 @@ def chat():
         text_reply = "API Key Gemini belum terpasang, Sir."
     else:
         try:
-            # Langsung panggil model gemini-2.5-flash tanpa looping
+            # Menggunakan model terbaru yang didukung API Key kamu: gemini-3.8-flash
             res = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.8-flash',
                 contents=prompt
             )
             raw_reply = res.text.strip()
