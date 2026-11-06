@@ -15,12 +15,10 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 @app.route("/", methods=["GET"])
 def home():
-    return jsonify({"status": "JARVIS Server Online", "version": "1.1"})
+    return jsonify({"status": "JARVIS Server Online", "version": "1.2"})
 
-# --- FITUR A: ROUTE INITIALIZATION (BOOTING SEQUENCE) ---
 @app.route("/init", methods=["GET"])
 def init():
-    """Endpoint yang dipanggil ESP32 saat pertama kali dinyalakan (Power-On)"""
     text_reply = "All systems online, Sir. Helm controls are fully operational."
     audio_filename = "jarvis_init.wav"
     audio_path = os.path.join(AUDIO_FOLDER, audio_filename)
@@ -35,80 +33,85 @@ def init():
         print(f"Error TTS Init: {e}")
 
     base_url = request.host_url.rstrip("/")
-    audio_url = f"{base_url}/static/{audio_filename}"
-
     return jsonify({
         "status": "READY",
         "jawaban": text_reply,
-        "audio_url": audio_url
+        "audio_url": f"{base_url}/static/{audio_filename}"
     })
 
-# --- FITUR B: ROUTE CHAT (INTERAKTIF & KONTROL MCU STYLED) ---
+def process_gemini_response(res):
+    text_reply = "At your service, Sir."
+    action = "DIAM"
+    if res and res.text:
+        raw_reply = res.text.strip()
+        if raw_reply.startswith("```json"):
+            raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
+        elif raw_reply.startswith("```"):
+            raw_reply = raw_reply.replace("```", "").strip()
+        try:
+            parsed_res = json.loads(raw_reply)
+            text_reply = parsed_res.get("jawaban", text_reply)
+            action = parsed_res.get("aksi", action)
+        except Exception:
+            text_reply = raw_reply
+    return text_reply, action
+
+PROMPT_SYSTEM = """
+Kamu adalah J.A.R.V.I.S., AI asisten canggih milik Tony Stark dari MCU.
+Aturan:
+1. Jika pengguna meminta membuka topeng/helm -> "aksi": "BUKA"
+2. Jika meminta menutup topeng/helm -> "aksi": "TUTUP"
+3. Jika bertanya/ngobrol biasa -> "aksi": "DIAM"
+4. Kepribadian: Sopan, cerdas, sedikit humor sarkas halus khas MCU, panggil 'Sir'.
+5. Jawab maksimal 1-2 kalimat pendek.
+
+Format JSON HANYA: {"jawaban": "teks", "aksi": "BUKA/TUTUP/DIAM"}
+"""
+
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.json or {}
     user_text = data.get("text", "Hi Jarvis")
-    user_text_lower = user_text.lower()
+    prompt = f"{PROMPT_SYSTEM}\nPengguna berkata: \"{user_text}\""
 
-    # Prompt kepribadian J.A.R.V.I.S. ala MCU
-    prompt = f"""
-    Kamu adalah J.A.R.V.I.S., AI asisten canggih milik Tony Stark dari MCU.
-    Pengguna berkata: "{user_text}".
-
-    Aturan Respon:
-    1. Jika pengguna meminta membuka topeng/helm -> "aksi": "BUKA"
-    2. Jika meminta menutup topeng/helm -> "aksi": "TUTUP"
-    3. Jika bertanya/ngobrol/perintah acak -> "aksi": "DIAM"
-    4. Kepribadian: Sangat sopan, berkelas, cerdas, sedikit memiliki humor sarkas halus khas Jarvis MCU jika diajak bercanda, dan selalu panggil pengguna dengan 'Sir'.
-    5. Panjang jawaban: MAKSIMAL 1 SAMPAI 2 KALIMAT PENDEK agar pemrosesan super cepat. Gunakan frasa khas seperti "Diagnostics complete", "As you wish, Sir", atau "Systems operational" jika relevan.
-
-    Format JSON HANYA: {{"jawaban": "teks balasan", "aksi": "BUKA/TUTUP/DIAM"}}
-    """
-
-    action = "DIAM"
     text_reply = "At your service, Sir."
-    ai_success = False
+    action = "DIAM"
 
     if client:
-        candidate_models = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-latest']
-        for m_name in candidate_models:
-            try:
-                res = client.models.generate_content(
-                    model=m_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        max_output_tokens=65,
-                        temperature=0.3
-                    )
-                )
-                if res and res.text:
-                    raw_reply = res.text.strip()
-                    if raw_reply.startswith("```json"):
-                        raw_reply = raw_reply.replace("```json", "").replace("```", "").strip()
-                    elif raw_reply.startswith("```"):
-                        raw_reply = raw_reply.replace("```", "").strip()
-                    
-                    parsed_res = json.loads(raw_reply)
-                    text_reply = parsed_res.get("jawaban", text_reply)
-                    action = parsed_res.get("aksi", action)
-                    ai_success = True
-                    break
-            except Exception:
-                continue
+        try:
+            res = client.models.generate_content(
+                model='gemini-3.8-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(max_output_tokens=65, temperature=0.3)
+            )
+            text_reply, action = process_gemini_response(res)
+        except Exception as e:
+            text_reply = f"Gemini Error: {str(e)}"
 
-    # Backup Offline jika AI High Demand (503)
-    if not ai_success:
-        if "buka" in user_text_lower and ("helm" in user_text_lower or "topeng" in user_text_lower):
-            action = "BUKA"
-            text_reply = "Opening the faceplate now, Sir."
-        elif "tutup" in user_text_lower and ("helm" in user_text_lower or "topeng" in user_text_lower):
-            action = "TUTUP"
-            text_reply = "Closing the faceplate now, Sir."
-        else:
-            action = "DIAM"
-            text_reply = "Systems operational, Sir, though external neural networks are busy."
+    return respond_with_audio(text_reply, action)
 
-    # Generate Suara Edge-TTS
+@app.route("/chat-audio", methods=["POST"])
+def chat_audio():
+    """Endpoint untuk menerima raw WAV audio dari ESP32"""
+    audio_bytes = request.data
+    text_reply = "At your service, Sir."
+    action = "DIAM"
+
+    if client and audio_bytes:
+        try:
+            audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
+            res = client.models.generate_content(
+                model='gemini-3.8-flash',
+                contents=[PROMPT_SYSTEM, audio_part],
+                config=types.GenerateContentConfig(max_output_tokens=65, temperature=0.3)
+            )
+            text_reply, action = process_gemini_response(res)
+        except Exception as e:
+            text_reply = f"Gemini Audio Error: {str(e)}"
+
+    return respond_with_audio(text_reply, action)
+
+def respond_with_audio(text_reply, action):
     audio_filename = "jarvis_reply.wav"
     audio_path = os.path.join(AUDIO_FOLDER, audio_filename)
 
@@ -122,12 +125,10 @@ def chat():
         print(f"Error TTS: {e}")
 
     base_url = request.host_url.rstrip("/")
-    audio_url = f"{base_url}/static/{audio_filename}"
-
     return jsonify({
         "jawaban": text_reply,
         "aksi": action,
-        "audio_url": audio_url
+        "audio_url": f"{base_url}/static/{audio_filename}"
     })
 
 @app.route("/static/<filename>", methods=["GET"])
