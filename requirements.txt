@@ -1,4 +1,4 @@
 flask
 google-genai
 edge-tts
-gunicorn
+miniaudio
