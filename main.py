@@ -103,7 +103,7 @@ def chat():
     if client:
         try:
             res = client.models.generate_content(
-                model='gemini-1.5-flash',  # <--- DIUBAH DI SINI
+                model='gemini-2.5-flash',  # <--- DIUBAH KE 2.5-FLASH
                 contents=prompt,
                 config=types.GenerateContentConfig(max_output_tokens=65, temperature=0.3)
             )
@@ -124,7 +124,7 @@ def chat_audio():
         try:
             audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
             res = client.models.generate_content(
-                model='gemini-1.5-flash',  # <--- DIUBAH DI SINI
+                model='gemini-2.5-flash',  # <--- DIUBAH KE 2.5-FLASH
                 contents=[PROMPT_SYSTEM, audio_part],
                 config=types.GenerateContentConfig(max_output_tokens=65, temperature=0.3)
             )
