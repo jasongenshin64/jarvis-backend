@@ -6,7 +6,7 @@ import time
 import io
 import wave
 import uuid
-import traceback # <-- Tambahan untuk debugging
+import traceback
 import edge_tts
 import miniaudio
 from flask import Flask, request, jsonify
@@ -17,7 +17,7 @@ app = Flask(__name__)
 # --- ENVIRONMENT VARIABLES ---
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 STT_MODEL = os.environ.get("GROQ_STT_MODEL", "whisper-large-v3-turbo").strip()
-LLM_MODEL = os.environ.get("GROQ_LLM_MODEL", "llama-3.3-70b-versatile").strip() # <-- DEFAULT KITA GANTI KE LLAMA
+LLM_MODEL = os.environ.get("GROQ_LLM_MODEL", "openai/gpt-oss-20b").strip() 
 BLOB_TOKEN = os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip()
 
 def requests_with_retry(url, method="POST", headers=None, json=None, data=None, files=None, timeout=15, max_retries=3):
@@ -104,46 +104,62 @@ def ask_jarvis_ai(user_text):
         "Content-Type": "application/json"
     }
 
+    # Prompt yang lebih tegas sesuai saran ChatGPT
     prompt_system = """
-    Kamu adalah J.A.R.V.I.S., AI asisten canggih milik Tony Stark dari MCU.
+    Kamu adalah J.A.R.V.I.S., asisten AI yang sopan, cerdas, dan memiliki kepribadian tenang seperti asisten profesional.
     Aturan:
-    1. Jika pengguna meminta membuka topeng/helm -> "aksi": "BUKA"
-    2. Jika meminta menutup topeng/helm -> "aksi": "TUTUP"
-    3. Jika bertanya/ngobrol biasa -> "aksi": "DIAM"
-    4. Kepribadian: Sopan, cerdas, sedikit humor sarkas halus khas MCU, panggil 'Sir'.
-    5. Jawab maksimal 1-2 kalimat pendek.
-
-    Format JSON HANYA: {"jawaban": "teks", "aksi": "BUKA/TUTUP/DIAM"}
+    1. Panggil pengguna dengan sebutan Sir.
+    2. Jika pengguna meminta membuka topeng atau helm, isi aksi dengan BUKA.
+    3. Jika pengguna meminta menutup topeng atau helm, isi aksi dengan TUTUP.
+    4. Jika pengguna bertanya atau mengobrol biasa, isi aksi dengan DIAM.
+    5. Jawaban maksimal 1-2 kalimat pendek.
+    6. Field jawaban harus berisi kalimat yang akan diucapkan.
+    7. Field aksi hanya boleh BUKA, TUTUP, atau DIAM.
+    Berikan jawaban sesuai format JSON yang ditentukan.
     """
 
+    # MENERAPKAN STRICT JSON SCHEMA (Saran ChatGPT)
     payload = {
         "model": LLM_MODEL,
         "messages": [
             {"role": "system", "content": prompt_system},
-            {"role": "user", "content": f"Pengguna berkata: {user_text}"}
+            {"role": "user", "content": user_text}
         ],
-        "temperature": 0.3,
-        "max_tokens": 65,
-        "response_format": {"type": "json_object"}
+        "max_tokens": 150,
+        "reasoning_effort": "low",
+        "reasoning_format": "hidden",
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "jarvis_response",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "jawaban": {"type": "string"},
+                        "aksi": {
+                            "type": "string",
+                            "enum": ["BUKA", "TUTUP", "DIAM"]
+                        }
+                    },
+                    "required": ["jawaban", "aksi"],
+                    "additionalProperties": False
+                }
+            }
+        }
     }
 
-    # --- LOGGING SESUAI SARAN CHATGPT ---
-    print(f"[GROQ] Starting LLM request")
-    print(f"[GROQ] Model: {LLM_MODEL}")
-    print(f"[GROQ] API key configured: {bool(GROQ_API_KEY)}")
-
+    print(f"[GROQ] Starting LLM request (Strict JSON)")
     response = requests_with_retry(url, method="POST", headers=headers, json=payload, timeout=25)
     
     print(f"[GROQ] HTTP Status: {response.status_code}")
-    print(f"[GROQ] Response: {response.text[:1000]}") # Print 1000 karakter pertama respon
 
     if response.status_code != 200:
+        print(f"[GROQ] Response: {response.text[:1000]}")
         raise RuntimeError(f"Groq HTTP {response.status_code}: {response.text}")
 
     result = response.json()
     content = result["choices"][0]["message"]["content"]
-    
-    print("[GROQ] LLM response received successfully")
     return content
 
 def process_ai_response(raw_text):
@@ -178,10 +194,8 @@ def chat():
         raw_ai_reply = ask_jarvis_ai(user_text)
         text_reply, action = process_ai_response(raw_ai_reply)
     except Exception as e:
-        # --- TRACEBACK SESUAI SARAN CHATGPT ---
         print(f"[CHAT ERROR] {repr(e)}")
-        traceback.print_exc() 
-        
+        traceback.print_exc()
         text_reply = "Sistem saraf AI saya sedang sibuk, Sir."
         action = "DIAM"
 
