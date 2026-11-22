@@ -6,6 +6,7 @@ import time
 import io
 import wave
 import uuid
+import traceback # <-- Tambahan untuk debugging
 import edge_tts
 import miniaudio
 from flask import Flask, request, jsonify
@@ -16,12 +17,9 @@ app = Flask(__name__)
 # --- ENVIRONMENT VARIABLES ---
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 STT_MODEL = os.environ.get("GROQ_STT_MODEL", "whisper-large-v3-turbo").strip()
-LLM_MODEL = os.environ.get("GROQ_LLM_MODEL", "openai/gpt-oss-20b").strip()
+LLM_MODEL = os.environ.get("GROQ_LLM_MODEL", "llama-3.3-70b-versatile").strip() # <-- DEFAULT KITA GANTI KE LLAMA
 BLOB_TOKEN = os.environ.get("BLOB_READ_WRITE_TOKEN", "").strip()
 
-# ==========================================
-# HELPER: RETRY UNTUK API GROQ
-# ==========================================
 def requests_with_retry(url, method="POST", headers=None, json=None, data=None, files=None, timeout=15, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -30,10 +28,9 @@ def requests_with_retry(url, method="POST", headers=None, json=None, data=None, 
             else:
                 response = requests.get(url, headers=headers, timeout=timeout)
 
-            # Jika kena Rate Limit (429) atau Server Error (5xx), coba lagi
             if response.status_code in [429, 500, 502, 503, 504]:
                 if attempt < max_retries - 1:
-                    time.sleep(2 ** attempt) # Jeda 1s, 2s, 4s
+                    time.sleep(2 ** attempt)
                     continue
             return response
         except requests.exceptions.RequestException:
@@ -43,12 +40,8 @@ def requests_with_retry(url, method="POST", headers=None, json=None, data=None, 
             raise
     return response
 
-# ==========================================
-# TTS & UPLOAD KE VERCEL BLOB
-# ==========================================
 async def generate_and_upload_wav(text_reply, filename):
     try:
-        # 1. Generate Suara JARVIS (British)
         communicate = edge_tts.Communicate(text_reply, "en-GB-RyanNeural")
         mp3_buffer = bytearray()
 
@@ -59,7 +52,6 @@ async def generate_and_upload_wav(text_reply, filename):
         if not mp3_buffer:
             raise RuntimeError("Audio kosong dari edge-tts")
 
-        # 2. Konversi ke WAV 16kHz
         decoded = miniaudio.decode(
             bytes(mp3_buffer),
             output_format=miniaudio.SampleFormat.SIGNED16,
@@ -76,16 +68,11 @@ async def generate_and_upload_wav(text_reply, filename):
         
         wav_bytes = wav_buffer.getvalue()
 
-        # 3. Upload ke Vercel Blob (Menggunakan SDK Resmi)
         if not BLOB_TOKEN:
             raise Exception("BLOB_READ_WRITE_TOKEN belum diatur.")
 
         result = await blob.put_blob(
-            filename, 
-            wav_bytes, 
-            access="public", 
-            content_type="audio/wav", 
-            add_random_suffix=True
+            filename, wav_bytes, access="public", content_type="audio/wav", add_random_suffix=True
         )
         return result.url
 
@@ -93,14 +80,10 @@ async def generate_and_upload_wav(text_reply, filename):
         print(f"[TTS/BLOB ERROR] {e}")
         return None
 
-# ==========================================
-# FUNGSI STT (GROQ WHISPER)
-# ==========================================
 def transcribe_audio(audio_bytes):
     url = "https://api.groq.com/openai/v1/audio/transcriptions"
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     
-    # Validasi ukuran file (maksimal 5MB agar tidak timeout)
     if len(audio_bytes) > 5 * 1024 * 1024:
         raise Exception("Ukuran audio terlalu besar.")
 
@@ -114,9 +97,6 @@ def transcribe_audio(audio_bytes):
     else:
         raise Exception(f"Groq STT Error {response.status_code}: {response.text}")
 
-# ==========================================
-# FUNGSI LLM (GROQ GPT-OSS)
-# ==========================================
 def ask_jarvis_ai(user_text):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -147,20 +127,28 @@ def ask_jarvis_ai(user_text):
         "response_format": {"type": "json_object"}
     }
 
-    response = requests_with_retry(url, method="POST", headers=headers, json=payload)
-    
-    if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"]
-    else:
-        raise Exception(f"Groq LLM Error {response.status_code}: {response.text}")
+    # --- LOGGING SESUAI SARAN CHATGPT ---
+    print(f"[GROQ] Starting LLM request")
+    print(f"[GROQ] Model: {LLM_MODEL}")
+    print(f"[GROQ] API key configured: {bool(GROQ_API_KEY)}")
 
-# ==========================================
-# PARSER JSON
-# ==========================================
+    response = requests_with_retry(url, method="POST", headers=headers, json=payload, timeout=25)
+    
+    print(f"[GROQ] HTTP Status: {response.status_code}")
+    print(f"[GROQ] Response: {response.text[:1000]}") # Print 1000 karakter pertama respon
+
+    if response.status_code != 200:
+        raise RuntimeError(f"Groq HTTP {response.status_code}: {response.text}")
+
+    result = response.json()
+    content = result["choices"][0]["message"]["content"]
+    
+    print("[GROQ] LLM response received successfully")
+    return content
+
 def process_ai_response(raw_text):
     text_reply = "At your service, Sir."
     action = "DIAM"
-    
     if raw_text:
         try:
             parsed = json.loads(raw_text)
@@ -172,16 +160,11 @@ def process_ai_response(raw_text):
             text_reply = raw_text
     return text_reply, action
 
-# ==========================================
-# ENDPOINTS
-# ==========================================
 @app.route("/init", methods=["GET"])
 def init():
     text_reply = "All systems online, Sir. Helm controls are fully operational."
     filename = f"init_{uuid.uuid4().hex}.wav"
-    
     audio_url = asyncio.run(generate_and_upload_wav(text_reply, filename))
-
     if audio_url:
         return jsonify({"status": "READY", "jawaban": text_reply, "audio_url": audio_url})
     return jsonify({"status": "ERROR", "jawaban": "TTS Gagal"}), 500
@@ -195,7 +178,10 @@ def chat():
         raw_ai_reply = ask_jarvis_ai(user_text)
         text_reply, action = process_ai_response(raw_ai_reply)
     except Exception as e:
-        print(f"[CHAT ERROR] {e}")
+        # --- TRACEBACK SESUAI SARAN CHATGPT ---
+        print(f"[CHAT ERROR] {repr(e)}")
+        traceback.print_exc() 
+        
         text_reply = "Sistem saraf AI saya sedang sibuk, Sir."
         action = "DIAM"
 
@@ -216,12 +202,12 @@ def chat_audio():
         try:
             user_text = transcribe_audio(audio_bytes)
             print(f"[STT] Pengguna: {user_text}")
-            
             if user_text.strip() != "":
                 raw_ai_reply = ask_jarvis_ai(user_text)
                 text_reply, action = process_ai_response(raw_ai_reply)
         except Exception as e:
-            print(f"[AUDIO ERROR] {e}")
+            print(f"[AUDIO ERROR] {repr(e)}")
+            traceback.print_exc()
             text_reply = "Sistem saraf AI saya sedang sibuk, Sir."
 
     filename = f"reply_{uuid.uuid4().hex}.wav"
