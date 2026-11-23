@@ -179,8 +179,8 @@ def transcribe_audio(audio_bytes):
 
     data = {
         "model": STT_MODEL,
-        "language": "id",
-        "response_format": "json"
+        "response_format": "json",
+        "temperature": 0
     }
 
     response = requests_with_retry(
