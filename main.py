@@ -106,7 +106,7 @@ async def generate_and_upload_wav(text_reply, filename):
                 mp3_buffer.extend(chunk["data"])
 
         if not mp3_buffer:
-            raise RuntimeError("Audio kosong dari edge-tts")
+            raise RuntimeError("No audio received from Edge TTS")
 
         decoded = miniaudio.decode(
             bytes(mp3_buffer),
@@ -127,7 +127,7 @@ async def generate_and_upload_wav(text_reply, filename):
 
         if not BLOB_TOKEN:
             raise Exception(
-                "BLOB_READ_WRITE_TOKEN belum diatur."
+                "BLOB_READ_WRITE_TOKEN is not configured."
             )
 
         result = await blob.put_blob(
@@ -152,13 +152,13 @@ async def generate_and_upload_wav(text_reply, filename):
 
 def transcribe_audio(audio_bytes):
     if not GROQ_API_KEY:
-        raise Exception("GROQ_API_KEY belum diatur.")
+        raise Exception("GROQ_API_KEY is not configured.")
 
     if not audio_bytes:
         return ""
 
     if len(audio_bytes) > 5 * 1024 * 1024:
-        raise Exception("Ukuran audio terlalu besar.")
+        raise Exception("Audio file is too large.")
 
     url = (
         "https://api.groq.com/openai/v1/"
@@ -215,7 +215,7 @@ def transcribe_audio(audio_bytes):
 
 def ask_jarvis_ai(user_text):
     if not GROQ_API_KEY:
-        raise Exception("GROQ_API_KEY belum diatur.")
+        raise Exception("GROQ_API_KEY is not configured.")
 
     url = (
         "https://api.groq.com/openai/v1/"
@@ -228,25 +228,19 @@ def ask_jarvis_ai(user_text):
     }
 
     prompt_system = """
-    Kamu adalah J.A.R.V.I.S., asisten AI yang sopan,
-    cerdas, dan memiliki kepribadian tenang seperti
-    asisten profesional.
+You are J.A.R.V.I.S., a polite, intelligent, calm professional AI assistant.
 
-    Aturan:
-    1. Panggil pengguna dengan sebutan Sir.
-    2. Jika pengguna meminta membuka topeng atau helm,
-       isi aksi dengan BUKA.
-    3. Jika pengguna meminta menutup topeng atau helm,
-       isi aksi dengan TUTUP.
-    4. Jika pengguna bertanya atau mengobrol biasa,
-       isi aksi dengan DIAM.
-    5. Jawaban maksimal 1-2 kalimat pendek.
-    6. Field jawaban harus berisi kalimat yang akan
-       diucapkan.
-    7. Field aksi hanya boleh BUKA, TUTUP, atau DIAM.
-    8. Selalu jawab dalam bahasa yang digunakan pengguna.
-    9. Berikan jawaban dalam format JSON yang diminta.
-    """
+Rules:
+1. Always speak and respond in English, regardless of the language used by the user.
+2. Address the user as Sir.
+3. If the user asks to open the helmet or faceplate, set action to BUKA.
+4. If the user asks to close the helmet or faceplate, set action to TUTUP.
+5. For ordinary questions or conversation, set action to DIAM.
+6. Keep spoken replies to 1-2 concise sentences.
+7. The jawaban field must contain the exact English sentence to be spoken.
+8. The aksi field must be exactly BUKA, TUTUP, or DIAM.
+9. Return only the requested JSON format.
+"""
 
     payload = {
         "model": LLM_MODEL,
@@ -387,7 +381,7 @@ def init():
         "status": "ERROR",
         "recognized": False,
         "transcript": "",
-        "jawaban": "TTS Gagal",
+        "jawaban": "TTS generation failed",
         "aksi": "DIAM",
         "audio_url": ""
     }), 500
@@ -414,7 +408,7 @@ def chat():
         traceback.print_exc()
 
         text_reply = (
-            "Sistem saraf AI saya sedang sibuk, Sir."
+            "My AI systems are temporarily busy, Sir."
         )
 
         action = "DIAM"
@@ -440,7 +434,7 @@ def chat():
     return jsonify({
         "recognized": True,
         "transcript": user_text,
-        "jawaban": "Gagal membuat suara",
+        "jawaban": "Unable to generate speech",
         "aksi": "DIAM",
         "audio_url": ""
     }), 500
@@ -517,7 +511,7 @@ def chat_audio():
         traceback.print_exc()
 
         text_reply = (
-            "Sistem saraf AI saya sedang sibuk, Sir."
+            "My AI systems are temporarily busy, Sir."
         )
 
         action = "DIAM"
@@ -704,7 +698,7 @@ def audio_finish():
     except Exception as e:
         print(f"[AI ERROR] {repr(e)}")
         traceback.print_exc()
-        text_reply = "Sistem saraf AI saya sedang sibuk, Sir."
+        text_reply = "My AI systems are temporarily busy, Sir."
         action = "DIAM"
 
     filename = f"reply_{uuid.uuid4().hex}.wav"
