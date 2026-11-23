@@ -558,6 +558,178 @@ def chat_audio():
 
 
 # ==========================================
+
+# ==========================================
+# CHUNKED AUDIO UPLOAD - ESP32 WITHOUT SD
+# ==========================================
+
+@app.route("/audio-chunk", methods=["POST"])
+def audio_chunk():
+    """Store one raw mono PCM chunk in Vercel Blob."""
+    session_id = request.headers.get("X-Audio-Session", "").strip()
+    index_text = request.headers.get("X-Audio-Index", "").strip()
+    chunk_bytes = request.get_data(cache=False)
+
+    if (
+        not session_id
+        or len(session_id) > 64
+        or not all(c.isalnum() or c == "-" for c in session_id)
+    ):
+        return jsonify({"ok": False, "error": "Invalid session id"}), 400
+
+    try:
+        chunk_index = int(index_text)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Invalid chunk index"}), 400
+
+    if chunk_index < 0 or chunk_index >= 512:
+        return jsonify({"ok": False, "error": "Chunk index out of range"}), 400
+
+    if not chunk_bytes or len(chunk_bytes) > 16384 or len(chunk_bytes) % 2:
+        return jsonify({"ok": False, "error": "Chunk must be 1-16384 even bytes"}), 400
+
+    if not BLOB_TOKEN:
+        return jsonify({"ok": False, "error": "Blob token missing"}), 500
+
+    try:
+        filename = f"audio_chunks/{session_id}/{chunk_index:04d}.pcm"
+        result = asyncio.run(
+            blob.put_blob(
+                filename,
+                chunk_bytes,
+                access="public",
+                content_type="application/octet-stream",
+                add_random_suffix=True
+            )
+        )
+        return jsonify({
+            "ok": True,
+            "index": chunk_index,
+            "chunk_url": result.url
+        })
+    except Exception as e:
+        print(f"[AUDIO CHUNK ERROR] {repr(e)}")
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": "Chunk storage failed"}), 500
+
+
+@app.route("/audio-finish", methods=["POST"])
+def audio_finish():
+    """Rebuild WAV from uploaded PCM chunks, then run the JARVIS pipeline."""
+    data = request.get_json(silent=True) or {}
+    chunk_urls = data.get("chunk_urls")
+
+    if (
+        not isinstance(chunk_urls, list)
+        or not chunk_urls
+        or len(chunk_urls) > 512
+        or not all(
+            isinstance(url, str) and url.startswith("https://")
+            for url in chunk_urls
+        )
+    ):
+        return jsonify({
+            "recognized": False,
+            "transcript": "",
+            "jawaban": "",
+            "aksi": "DIAM",
+            "audio_url": "",
+            "error": "Invalid chunk_urls"
+        }), 400
+
+    try:
+        pcm_buffer = bytearray()
+        for index, chunk_url in enumerate(chunk_urls):
+            response = requests.get(chunk_url, timeout=20)
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"Chunk {index} download failed: HTTP {response.status_code}"
+                )
+            chunk_data = response.content
+            if not chunk_data or len(chunk_data) % 2:
+                raise RuntimeError(f"Chunk {index} is empty or malformed")
+            pcm_buffer.extend(chunk_data)
+            if len(pcm_buffer) > 5 * 1024 * 1024:
+                raise RuntimeError("Audio exceeds 5 MB limit")
+
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(pcm_buffer)
+        audio_bytes = wav_buffer.getvalue()
+        print(
+            f"[AUDIO CHUNKS] Rebuilt WAV: {len(audio_bytes)} bytes "
+            f"from {len(chunk_urls)} chunks"
+        )
+    except Exception as e:
+        print(f"[AUDIO ASSEMBLY ERROR] {repr(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "recognized": False,
+            "transcript": "",
+            "jawaban": "",
+            "aksi": "DIAM",
+            "audio_url": "",
+            "error": "Audio assembly failed"
+        }), 500
+
+    try:
+        user_text = transcribe_audio(audio_bytes)
+        print(f"[STT] Transcript: {user_text}")
+    except Exception as e:
+        print(f"[STT ERROR] {repr(e)}")
+        traceback.print_exc()
+        return jsonify({
+            "recognized": False,
+            "transcript": "",
+            "jawaban": "",
+            "aksi": "DIAM",
+            "audio_url": ""
+        }), 502
+
+    if not user_text.strip():
+        return jsonify({
+            "recognized": False,
+            "transcript": "",
+            "jawaban": "",
+            "aksi": "DIAM",
+            "audio_url": ""
+        })
+
+    try:
+        raw_ai_reply = ask_jarvis_ai(user_text)
+        text_reply, action = process_ai_response(raw_ai_reply)
+    except Exception as e:
+        print(f"[AI ERROR] {repr(e)}")
+        traceback.print_exc()
+        text_reply = "Sistem saraf AI saya sedang sibuk, Sir."
+        action = "DIAM"
+
+    filename = f"reply_{uuid.uuid4().hex}.wav"
+    audio_url = asyncio.run(
+        generate_and_upload_wav(text_reply, filename)
+    )
+
+    if audio_url:
+        return jsonify({
+            "recognized": True,
+            "transcript": user_text,
+            "jawaban": text_reply,
+            "aksi": action,
+            "audio_url": audio_url
+        })
+
+    return jsonify({
+        "recognized": True,
+        "transcript": user_text,
+        "jawaban": text_reply,
+        "aksi": action,
+        "audio_url": ""
+    }), 500
+
+
 # LOCAL SERVER
 # ==========================================
 
